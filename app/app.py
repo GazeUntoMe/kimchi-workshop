@@ -3,6 +3,7 @@ from flask import Flask, jsonify, request
 
 from app.cache import TTLCache
 from app.config import CACHE_TTL, RATE_LIMIT, RATE_WINDOW, data_file
+from app.models import validate_priority
 from app.ratelimit import SlidingWindowLimiter
 from app.storage import TaskStore
 
@@ -23,20 +24,26 @@ def create_app():
 
     @app.get("/tasks")
     def list_tasks():
-        cached = cache.get("tasks:list")
+        status = request.args.get("status")
+        cache_key = f"tasks:list:{status or 'all'}"
+        cached = cache.get(cache_key)
         if cached is not None:
             return jsonify(cached)
-        tasks = store.list_tasks()
-        cache.set("tasks:list", tasks)
+        tasks = store.list_tasks(status=status)
+        cache.set(cache_key, tasks)
         return jsonify(tasks)
 
     @app.post("/tasks")
     def create_task():
         payload = request.get_json() or {}
-        task = store.create_task(
-            title=payload["title"],
-            priority=payload.get("priority", 1),
-        )
+        title = payload.get("title")
+        if not isinstance(title, str) or not title.strip():
+            return jsonify({"error": "bad_request"}), 400
+        try:
+            priority = validate_priority(payload.get("priority", 1))
+        except ValueError:
+            return jsonify({"error": "bad_request"}), 400
+        task = store.create_task(title=title, priority=priority)
         return jsonify(task), 201
 
     @app.get("/tasks/<int:task_id>")
